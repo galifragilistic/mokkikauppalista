@@ -1,8 +1,9 @@
 import { useState } from 'react'
 
 type Props = {
-  onAdd: (url: string) => Promise<boolean>
+  onAdd: (raw: string) => Promise<boolean>
   busy: boolean
+  busyDetail?: string | null
   error: string | null
   clearError: () => void
   categories: string[]
@@ -10,7 +11,16 @@ type Props = {
   onSelectCategory: (c: string) => void
 }
 
-export function Toolbar({ onAdd, busy, error, clearError, categories, selectedCategory, onSelectCategory }: Props) {
+export function Toolbar({
+  onAdd,
+  busy,
+  busyDetail,
+  error,
+  clearError,
+  categories,
+  selectedCategory,
+  onSelectCategory,
+}: Props) {
   const [val, setVal] = useState('')
 
   const submit = async () => {
@@ -22,15 +32,24 @@ export function Toolbar({ onAdd, busy, error, clearError, categories, selectedCa
   return (
     <div className="toolbar">
       <div className="url-bar">
-        <input
+        <textarea
           value={val}
+          rows={2}
           onChange={(e) => setVal(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') submit() }}
-          placeholder="Liitä S-kaupan tuotelinkki (esim. https://www.s-kaupat.fi/tuote/coop-omena-royal-gala/2003505600001)"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault()
+              submit()
+            }
+          }}
+          placeholder="Yksi tai useita S-kaupan tuotelinkkejä (yksi per rivi, tai pilkuilla / välilyönneillä erotettuna). Esim. https://www.s-kaupat.fi/tuote/…/EAN — Ctrl+Enter tai Cmd+Enter lisää."
         />
         <button onClick={submit} disabled={busy || !val.trim()}>
           {busy ? (
-            <><span className="spin" />Haetaan…</>
+            <>
+              <span className="spin" />
+              {busyDetail ? `Haetaan ${busyDetail}…` : 'Haetaan…'}
+            </>
           ) : (
             <>Lisää <span style={{ fontSize: 16 }}>+</span></>
           )}

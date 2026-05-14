@@ -37,11 +37,16 @@ function buildHeaders(req: Request): Record<string, string> {
   if (cookies) headers.Cookie = cookies
   // S-kaupat authenticates GraphQL via Authorization: Bearer <accessToken>.
   // The token comes from OAuth (voikukka.fi) and lives in the browser's
-  // Apollo Client cache; copy it from a logged-in browser tab into
-  // SKAUPAT_BEARER_TOKEN to enable authenticated mutations like
-  // createShoppingList. Access tokens typically expire in ~1 hour.
+  // Apollo Client cache; copy it from a logged-in browser tab into the app
+  // Authorization field or SKAUPAT_BEARER_TOKEN for createShoppingList.
   const bearer = process.env.SKAUPAT_BEARER_TOKEN
-  if (bearer) headers.Authorization = `Bearer ${bearer.replace(/^Bearer\s+/i, '')}`
+  const incomingAuth = req.get('authorization')
+  if (incomingAuth?.trim()) {
+    const token = incomingAuth.trim().replace(/^Bearer\s+/i, '').trim()
+    if (token) headers.Authorization = `Bearer ${token}`
+  } else if (bearer) {
+    headers.Authorization = `Bearer ${bearer.replace(/^Bearer\s+/i, '')}`
+  }
   for (const h of FORWARDED_REQUEST_HEADERS) {
     const v = req.get(h)
     if (v) headers[h] = v

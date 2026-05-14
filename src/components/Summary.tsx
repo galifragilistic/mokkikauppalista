@@ -1,4 +1,5 @@
 import { ParticipantList } from './ParticipantList'
+import { SkaupatAuthPanel } from './SkaupatAuthPanel'
 import { fmtPrice, fmtPriceParts } from '../utils'
 import type { Item, Participant, PerPersonTotals } from '../types'
 
@@ -90,7 +91,15 @@ export function Summary({
         </div>
       </div>
 
-      <div className="summary-io">
+      <button className="cta" onClick={onSubmit} disabled={items.length === 0}>
+        Tilaa S-kaupasta
+        <span className="arrow">→</span>
+      </button>
+      <div style={{ fontSize: 11, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.4 }}>
+        Valitse kauppa ja noutoaika tilausta varten.
+      </div>
+
+      <div className="summary-io summary-io--below-cta">
         <button type="button" className="summary-io-btn" onClick={onExportJson}>
           Vie JSON
         </button>
@@ -102,13 +111,7 @@ export function Summary({
         Koko lista, kategoriat, jaon asetukset ja porukka. Voit jakaa tiedoston tai palauttaa myöhemmin.
       </div>
 
-      <button className="cta" onClick={onSubmit} disabled={items.length === 0}>
-        Tilaa S-kaupasta
-        <span className="arrow">→</span>
-      </button>
-      <div style={{ fontSize: 11, color: 'var(--ink-3)', textAlign: 'center', marginTop: 8, lineHeight: 1.4 }}>
-        Valitse kauppa ja noutoaika tilausta varten.
-      </div>
+      <SkaupatAuthPanel />
     </div>
   )
 }

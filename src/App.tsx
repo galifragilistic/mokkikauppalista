@@ -11,6 +11,7 @@ import {
   PARTICIPANT_COLORS,
   buildExportFile,
   parseImportedState,
+  extractProductUrlsFromText,
 } from "./utils";
 import type { Item, Participant, ByCategory } from "./types";
 
@@ -46,6 +47,7 @@ function App() {
     saved?.categories?.[0] || DEFAULT_CATEGORIES[0],
   );
   const [busy, setBusy] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitOpen, setSubmitOpen] = useState(false);
 
@@ -117,22 +119,17 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- participant count is intentional trigger
   }, [participants.length]);
 
-  const addItem = async (url: string): Promise<boolean> => {
-    setBusy(true);
-    setError(null);
-    try {
-      const p = await resolveProductWithFallback(url);
-      const defaultCategory = categories.includes(selectedCategory)
-        ? selectedCategory
-        : categories[0] || "Sekalaiset";
+  const defaultCategoryForNewItems = () =>
+    categories.includes(selectedCategory) ? selectedCategory : categories[0] || "Sekalaiset";
 
-      // If the same EAN already exists in the same category, just bump qty
-      const existing = items.find(it => it.ean === p.ean && it.category === defaultCategory);
+  type Resolved = Awaited<ReturnType<typeof resolveProductWithFallback>>;
+
+  const appendResolvedProduct = (url: string, p: Resolved, defaultCategory: string) => {
+    setItems(prev => {
+      const existing = prev.find(it => it.ean === p.ean && it.category === defaultCategory);
       if (existing) {
-        setItems(prev => prev.map(it => (it.id === existing.id ? { ...it, qty: it.qty + 1 } : it)));
-        return true;
+        return prev.map(it => (it.id === existing.id ? { ...it, qty: it.qty + 1 } : it));
       }
-
       const id = "it_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
       const newItem: Item = {
         id,
@@ -152,7 +149,16 @@ function App() {
         comment: "",
         assignment: { shared: true, people: [] },
       };
-      setItems(prev => [...prev, newItem]);
+      return [...prev, newItem];
+    });
+  };
+
+  const addItem = async (url: string): Promise<boolean> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const p = await resolveProductWithFallback(url);
+      appendResolvedProduct(url, p, defaultCategoryForNewItems());
       return true;
     } catch (e) {
       setError((e as Error).message || "Tuotteen lisäys epäonnistui");
@@ -160,6 +166,50 @@ function App() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const addItemsFromInput = async (raw: string): Promise<boolean> => {
+    const urls = extractProductUrlsFromText(raw);
+    if (!urls.length) {
+      setError("Ei kelvollisia S-kaupan tuotelinkkejä tai EAN-koodeja.");
+      return false;
+    }
+    if (urls.length === 1) {
+      return addItem(urls[0]!);
+    }
+
+    const cat = defaultCategoryForNewItems();
+    setBusy(true);
+    setBulkProgress({ current: 0, total: urls.length });
+    setError(null);
+    let okCount = 0;
+    const failedLines: string[] = [];
+
+    for (let i = 0; i < urls.length; i++) {
+      const url = urls[i]!;
+      setBulkProgress({ current: i + 1, total: urls.length });
+      try {
+        const p = await resolveProductWithFallback(url);
+        appendResolvedProduct(url, p, cat);
+        okCount++;
+      } catch (e) {
+        failedLines.push(`${i + 1}. linkki: ${(e as Error).message}`);
+      }
+    }
+
+    setBulkProgress(null);
+    setBusy(false);
+
+    if (failedLines.length > 0) {
+      const tail = failedLines.length > 2 ? ` (+${failedLines.length - 2} muuta)` : "";
+      setError(
+        okCount > 0
+          ? `Lisättiin ${okCount}/${urls.length} tuotetta. Virheet: ${failedLines.slice(0, 2).join(" ")}${tail}`
+          : failedLines[0] || "Tuotteiden lisäys epäonnistui",
+      );
+    }
+
+    return okCount > 0;
   };
 
   const updateItem = (id: string, patch: Partial<Item>) => {
@@ -267,8 +317,9 @@ function App() {
         </div>
 
         <Toolbar
-          onAdd={addItem}
+          onAdd={addItemsFromInput}
           busy={busy}
+          busyDetail={bulkProgress ? `${bulkProgress.current}/${bulkProgress.total}` : null}
           error={error}
           clearError={() => setError(null)}
           categories={categories}
@@ -280,15 +331,16 @@ function App() {
           <div className='empty'>
             <h3>Tyhjä kauppalista</h3>
             <p>
-              Liitä S-kaupan tuotelinkki yläreunaan, niin tuote ilmestyy tähän automaattisesti. Voit
-              valita kategorian, lisätä kommentin ja jakaa kustannuksen kenelle tahansa porukasta.
+              Liitä yksi tai useampi S-kaupan tuotelinkki yläreunaan (useita rivejä tai pilkuilla
+              erotettuna) ja paina Lisää. Voit valita kategorian, lisätä kommentin ja jakaa
+              kustannuksen kenelle tahansa porukasta.
             </p>
             <div className='examples'>
               <div style={{ color: "var(--ink-3)", marginBottom: 4 }}>
                 tai kokeile esimerkkilinkkejä:
               </div>
               {EXAMPLE_URLS.map(u => (
-                <button key={u} onClick={() => addItem(u)}>
+                <button key={u} onClick={() => addItemsFromInput(u)}>
                   {u.replace("https://www.", "")}
                 </button>
               ))}

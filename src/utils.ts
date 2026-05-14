@@ -26,6 +26,47 @@ export function parseProductUrl(input: string): { ean: string; slug: string } | 
   return null
 }
 
+/** Poimii kelvolliset tuotelinkit / EAN-rivit tekstistä (rivinvaihdot, välilyönnit, pilkut). */
+export function extractProductUrlsFromText(input: string): string[] {
+  const raw = String(input).trim()
+  if (!raw) return []
+
+  const embeddedRe = /https?:\/\/(?:www\.)?s-kaupat\.fi\/tuote\/[^/\s,;]+\/\d{8,14}/gi
+
+  const out: string[] = []
+  const pushValid = (fragment: string) => {
+    const t = fragment.trim()
+    if (!t) return
+    if (parseProductUrl(t)) out.push(t)
+  }
+
+  const lines = raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
+
+  if (lines.length > 1) {
+    for (const line of lines) {
+      const embedded = line.match(embeddedRe)
+      if (embedded?.length) {
+        for (const m of embedded) pushValid(m)
+      } else {
+        pushValid(line)
+      }
+    }
+    return out
+  }
+
+  const block = lines[0] ?? raw
+  const embedded = block.match(embeddedRe)
+  if (embedded?.length) {
+    for (const m of embedded) pushValid(m)
+    if (out.length) return out
+  }
+
+  for (const part of block.split(/[\s,;]+/)) {
+    pushValid(part)
+  }
+  return out
+}
+
 export function slugToName(slug: string): string {
   if (!slug) return 'Tuntematon tuote'
   return slug
@@ -344,6 +385,40 @@ const GQL_HEADERS = {
   'x-client-version': 'production-701c6d3ae099966af39189decca0f7754d77f82c',
 }
 
+const SKAUPAT_BEARER_STORAGE_KEY = 'ruokatilaus-skaupat-bearer-v1'
+
+/** OAuth access token ilman "Bearer "-etuliitettä; ei kuulu JSON-vientiin. */
+export function getStoredSkaupatBearer(): string | null {
+  try {
+    const raw = localStorage.getItem(SKAUPAT_BEARER_STORAGE_KEY)
+    if (!raw?.trim()) return null
+    return raw.trim().replace(/^Bearer\s+/i, '')
+  } catch {
+    return null
+  }
+}
+
+export function setStoredSkaupatBearer(token: string | null): void {
+  try {
+    if (token == null || !String(token).trim()) {
+      localStorage.removeItem(SKAUPAT_BEARER_STORAGE_KEY)
+      return
+    }
+    const cleaned = String(token).trim().replace(/^Bearer\s+/i, '')
+    if (cleaned) localStorage.setItem(SKAUPAT_BEARER_STORAGE_KEY, cleaned)
+    else localStorage.removeItem(SKAUPAT_BEARER_STORAGE_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+function skaupatGqlHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { ...GQL_HEADERS }
+  const t = getStoredSkaupatBearer()
+  if (t) headers.Authorization = `Bearer ${t}`
+  return headers
+}
+
 export async function searchAddresses(query: string): Promise<AddressSuggestion[]> {
   if (!query.trim()) return []
   const variables = { query, searchContext: 'DELIVERY_METHOD_SELECTION' }
@@ -351,7 +426,7 @@ export async function searchAddresses(query: string): Promise<AddressSuggestion[
   const url = SKAUPAT_API + '?operationName=GetAddressAutosuggestions' +
     '&variables=' + encodeURIComponent(JSON.stringify(variables)) +
     '&extensions=' + encodeURIComponent(JSON.stringify(extensions))
-  const res = await fetch(url, { headers: GQL_HEADERS })
+  const res = await fetch(url, { headers: skaupatGqlHeaders() })
   if (!res.ok) throw new Error('Osoitehaku epäonnistui: ' + res.status)
   const j = await res.json()
   return j.data?.addressAutosuggest ?? []
@@ -363,7 +438,7 @@ export async function fetchPickupSlots(lat: number, lng: number, date: string): 
   const url = SKAUPAT_API + '?operationName=remotePickupSlots' +
     '&variables=' + encodeURIComponent(JSON.stringify(variables)) +
     '&extensions=' + encodeURIComponent(JSON.stringify(extensions))
-  const res = await fetch(url, { headers: GQL_HEADERS })
+  const res = await fetch(url, { headers: skaupatGqlHeaders() })
   if (!res.ok) throw new Error('Aikaslottihaku epäonnistui: ' + res.status)
   const j = await res.json()
   return j.data?.pickupSlotsForCoordinates?.slotsInPickupPoints ?? []
@@ -407,7 +482,7 @@ export async function submitCart(items: Item[], params: CartSubmitParams): Promi
 
   const res = await fetch(SKAUPAT_API, {
     method: 'POST',
-    headers: GQL_HEADERS,
+    headers: skaupatGqlHeaders(),
     body: JSON.stringify({
       operationName: 'RemoteGetValidateCart',
       variables: {
@@ -447,9 +522,9 @@ export async function submitCart(items: Item[], params: CartSubmitParams): Promi
 // where the user clicks a single button to copy the list into the cart.
 //
 // Requires an authenticated OAuth access token (S-kaupat uses
-// `Authorization: Bearer <token>`, not cookies). Set SKAUPAT_BEARER_TOKEN in
-// the local proxy's .env.local; the proxy will attach it to upstream calls.
-// Without auth the mutation returns a "Unauthorized" GraphQL error.
+// `Authorization: Bearer <token>`, not cookies). Liitä token sovelluksen
+// kenttään (localStorage) tai aseta SKAUPAT_BEARER_TOKEN palvelimen .env.localiin;
+// proxy välittää asiakkaan Authorization-headerin eteenpäin ensisijaisesti.
 
 export type CreatedShoppingList = { id: string; name: string }
 
@@ -475,7 +550,7 @@ export async function createShoppingListWithProducts(
 
   const res = await fetch(SKAUPAT_API, {
     method: 'POST',
-    headers: GQL_HEADERS,
+    headers: skaupatGqlHeaders(),
     body: JSON.stringify({
       operationName: 'RemoteCreateUserListWithProducts',
       variables: {
@@ -493,7 +568,7 @@ export async function createShoppingListWithProducts(
   })
 
   const authHint =
-    'Kirjaudu sisään s-kaupat.fi:hin selaimessa, kopioi Authorization: Bearer <token> -headerin arvo DevToolsin Network-välilehdestä ja aseta se SKAUPAT_BEARER_TOKEN-arvoksi .env.localiin. Token vanhenee ~1h välein.'
+    'Kirjaudu sisään s-kaupat.fi:ssä, kopioi DevToolsissa verkko-pyynnön Authorization: Bearer … -token ja liitä se sovelluksen authorization-kenttään (tai aseta SKAUPAT_BEARER_TOKEN palvelimen .env.localiin). Token vanhenee tyypillisesti noin tunnissa.'
 
   if (res.status === 401 || res.status === 403) {
     throw new Error('Tunnistautuminen S-kauppaan epäonnistui. ' + authHint)
